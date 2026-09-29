@@ -1,50 +1,62 @@
-##################################
-# Stage 1: Build Stage
-##################################
-FROM node:18-alpine AS builder
-
-# Add metadata for authorship and app identification
-LABEL maintainer="Amitabh Soni <amitabhdevops2024@gmail.com>" \
-      app="gemini" \
-      stage="build"
+# ==========================================
+# Stage 1: Dependencies
+# ==========================================
+FROM node:22-alpine AS deps
 
 WORKDIR /app
 
-# Install build dependencies
-COPY package.json package-lock.json* ./
+RUN apk add --no-cache libc6-compat
+
+COPY package.json package-lock.json ./
+
 RUN npm ci
 
-# Copy source and build
-COPY . .
-RUN npm run build
 
-# Clean up dev dependencies after build
-RUN rm -rf node_modules && npm cache clean --force
-
-##################################
-# Stage 2: Production Stage
-##################################
-FROM node:18-alpine AS production
-
-# Add metadata for the final image
-LABEL maintainer="Amitabh Soni <amitabhdevops2024@gmail.com>" \
-      app="gemini" \
-      stage="production"
+# ==========================================
+# Stage 2: Build
+# ==========================================
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install only production dependencies
-COPY package.json package-lock.json* ./
-RUN npm ci --production && npm cache clean --force
+RUN apk add --no-cache libc6-compat
 
-# Copy minimal required files
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.mjs ./
+COPY --from=deps /app/node_modules ./node_modules
 
-# Set production environment
+COPY . .
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN npm run build
+
+
+# ==========================================
+# Stage 3: Production Runtime
+# ==========================================
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/public ./public
+
+COPY --from=builder \
+    --chown=nextjs:nodejs \
+    /app/.next/standalone ./
+
+COPY --from=builder \
+    --chown=nextjs:nodejs \
+    /app/.next/static ./.next/static
+
+USER nextjs
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

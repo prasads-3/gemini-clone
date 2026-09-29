@@ -1,14 +1,16 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
+
   images: {
     remotePatterns: [
       {
         protocol: "https",
         hostname: "lh3.googleusercontent.com",
-        pathname: '/**',  // Wildcard for all paths under this hostname
+        pathname: "/**",
       },
     ],
-    unoptimized: true,  // Disables image optimization for this pattern
+    unoptimized: true,
   },
 };
 
