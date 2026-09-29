@@ -34,14 +34,31 @@ pipeline {
                 sh '''
                     echo "========== TOOLCHAIN =========="
 
+                    echo "Node:"
                     node --version
+
+                    echo "NPM:"
                     npm --version
+
+                    echo "Git:"
                     git --version
+
+                    echo "Docker:"
                     docker --version
+
+                    echo "Trivy:"
                     trivy --version | head -n 1
+
+                    echo "Gitleaks:"
                     gitleaks version
+
+                    echo "Kubectl:"
                     kubectl version --client --output=yaml | head -n 8 || true
+
+                    echo "Terraform:"
                     terraform version | head -n 1 || true
+
+                    echo "Helm:"
                     helm version --short || true
 
                     echo "=============================="
@@ -69,6 +86,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
+                    echo "Installing dependencies..."
                     npm ci
                 '''
             }
@@ -77,7 +95,10 @@ pipeline {
         stage('TypeScript Validation') {
             steps {
                 sh '''
+                    echo "Running TypeScript validation..."
                     npx tsc --noEmit
+
+                    echo "TypeScript validation PASSED"
                 '''
             }
         }
@@ -85,7 +106,11 @@ pipeline {
         stage('Application Build') {
             steps {
                 sh '''
+                    echo "Building Next.js application..."
+
                     npm run build
+
+                    echo "Next.js build PASSED"
                 '''
             }
         }
@@ -93,11 +118,14 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
+
                     def scannerHome = tool 'SonarQube Scanner'
 
                     withSonarQubeEnv('sonar') {
                         sh """
-                            echo "Running SonarQube analysis..."
+                            echo "======================================"
+                            echo "Running SonarQube Analysis"
+                            echo "======================================"
 
                             ${scannerHome}/bin/sonar-scanner
 
@@ -111,12 +139,16 @@ pipeline {
         stage('Filesystem Security Scan - Trivy') {
             steps {
                 sh '''
+                    echo "Running Trivy filesystem scan..."
+
                     trivy fs \
                       --scanners vuln,secret,misconfig \
                       --severity HIGH,CRITICAL \
                       --exit-code 0 \
                       --format table \
                       .
+
+                    echo "Trivy filesystem scan completed"
                 '''
             }
         }
@@ -124,16 +156,29 @@ pipeline {
         stage('Docker Build') {
             steps {
                 script {
-                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
+
+                    def shortCommit = sh(
+                        script: 'git rev-parse --short=7 HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortCommit}"
                     env.IMAGE_NAME = "${env.APP_NAME}:${env.IMAGE_TAG}"
+
+                    echo "======================================"
+                    echo "Docker Image Build"
+                    echo "Image: ${env.IMAGE_NAME}"
+                    echo "======================================"
 
                     sh """
                         docker build \
                           --pull \
-                          -t ${IMAGE_NAME} \
+                          -t ${env.IMAGE_NAME} \
                           .
 
                         echo "Docker build PASSED"
+
+                        docker images ${env.APP_NAME}
                     """
                 }
             }
@@ -142,38 +187,70 @@ pipeline {
         stage('Container Smoke Test') {
             steps {
                 script {
+
                     env.CONTAINER_NAME =
                         "${env.APP_NAME}-smoke-${env.BUILD_NUMBER}"
 
                     sh """
                         set -e
 
-                        docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+                        echo "======================================"
+                        echo "Container Smoke Test"
+                        echo "======================================"
+
+                        docker rm -f ${env.CONTAINER_NAME} 2>/dev/null || true
 
                         docker run -d \
-                            --name ${CONTAINER_NAME} \
+                            --name ${env.CONTAINER_NAME} \
                             -p 127.0.0.1:18080:3000 \
-                            ${IMAGE_NAME}
+                            ${env.IMAGE_NAME}
 
+                        echo "Container started"
                         echo "Waiting for application..."
 
                         for i in \$(seq 1 30); do
-                            if curl -fsS http://127.0.0.1:18080/ > /dev/null; then
+
+                            if curl -fsS \
+                                http://127.0.0.1:18080/ \
+                                > /dev/null; then
+
+                                echo "Application is responding"
                                 echo "Smoke test PASSED"
                                 break
                             fi
 
-                            echo "Attempt \$i/30..."
+                            echo "Attempt \$i/30: application not ready yet..."
+
                             sleep 2
 
                             if [ "\$i" -eq 30 ]; then
-                                docker logs ${CONTAINER_NAME} || true
+
+                                echo "Application failed to become ready"
+
+                                echo "========== CONTAINER STATUS =========="
+
+                                docker ps \
+                                    --filter "name=${env.CONTAINER_NAME}" || true
+
+                                echo "========== CONTAINER LOGS =========="
+
+                                docker logs \
+                                    ${env.CONTAINER_NAME} || true
+
                                 exit 1
                             fi
                         done
 
-                        docker ps --filter "name=${CONTAINER_NAME}"
-                        docker logs --tail 30 ${CONTAINER_NAME}
+                        echo "========== CONTAINER STATUS =========="
+
+                        docker ps \
+                            --filter "name=${env.CONTAINER_NAME}"
+
+                        echo "========== CONTAINER LOGS =========="
+
+                        docker logs \
+                            --tail 30 \
+                            ${env.CONTAINER_NAME}
                     """
                 }
             }
@@ -182,11 +259,17 @@ pipeline {
         stage('Container Security Scan - Trivy') {
             steps {
                 sh '''
+                    echo "======================================"
+                    echo "Trivy Container Image Scan"
+                    echo "======================================"
+
                     trivy image \
                       --severity HIGH,CRITICAL \
                       --exit-code 0 \
                       --format table \
                       "${IMAGE_NAME}"
+
+                    echo "Trivy image scan completed"
                 '''
             }
         }
@@ -196,13 +279,23 @@ pipeline {
 
         always {
             sh '''
+                echo "Cleaning smoke-test container..."
+
                 if [ -n "${CONTAINER_NAME}" ]; then
-                    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+                    docker rm -f \
+                        "${CONTAINER_NAME}" \
+                        2>/dev/null || true
                 fi
+
+                echo "Post-build cleanup completed"
             '''
         }
 
         success {
+            echo "=========================================="
+            echo "CI PASSED"
+            echo "=========================================="
+
             mail(
                 to: 'developerprasad479@gmail.com',
                 subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
@@ -215,16 +308,22 @@ Job Name     : ${env.JOB_NAME}
 Build Number : ${env.BUILD_NUMBER}
 Build URL    : ${env.BUILD_URL}
 
-Pipeline:
-- Gitleaks
+Pipeline Stages:
+
+- Checkout
+- Toolchain Verification
+- Gitleaks Secret Scan
 - npm ci
-- TypeScript
+- TypeScript Validation
 - Next.js Build
-- SonarQube
-- Trivy Filesystem
+- SonarQube Analysis
+- Trivy Filesystem Scan
 - Docker Build
 - Container Smoke Test
-- Trivy Image
+- Trivy Image Scan
+
+Docker Image:
+${env.IMAGE_NAME ?: 'N/A'}
 
 Regards,
 Jenkins
@@ -233,6 +332,10 @@ Jenkins
         }
 
         failure {
+            echo "=========================================="
+            echo "CI FAILED"
+            echo "=========================================="
+
             mail(
                 to: 'developerprasad479@gmail.com',
                 subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
