@@ -13,7 +13,6 @@ import { lowlight } from "lowlight";
 import { Markdown as TipTapMkd } from "tiptap-markdown";
 import { FormatOutput } from "@/utils/shadow";
 import root from "react-shadow/styled-components";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import geminiZustand from "@/utils/gemini-zustand";
 import { FaWandMagicSparkles } from "react-icons/fa6";
 import { createPortal } from "react-dom";
@@ -72,9 +71,6 @@ const ChatProvider: React.FC<{
   const [promptModify, setPromptModify] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_API_KEY as string);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
   const editor = useEditor({
     extensions,
     content: initialResponse,
@@ -118,10 +114,37 @@ const ChatProvider: React.FC<{
 
     try {
       setUpdateLoader(true);
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      if (!text) throw new Error("Error while generating prompt");
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+        }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = "Failed to generate Gemini response";
+
+        try {
+          const errorData = await response.json();
+
+          if (errorData?.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Ignore invalid error response.
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const text = await response.text();
+
+      if (!text.trim()) {
+        throw new Error("Error while generating prompt");
+      }
       const updatedContent = await updateResponse({
         chatUniqueId,
         updatedResponse: text,

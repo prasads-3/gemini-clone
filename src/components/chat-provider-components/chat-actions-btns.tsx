@@ -11,7 +11,6 @@ import { Toaster, toast } from 'sonner'
 import { MdContentCopy, MdOutlineFlag } from "react-icons/md";
 import geminiZustand from "@/utils/gemini-zustand";
 import { FcGoogle } from "react-icons/fc";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import Link from "next/link";
 import { IoMdSearch } from "react-icons/io";
 
@@ -28,8 +27,6 @@ const ChatActionsBtns = ({
   shareMsg: string;
 }) => {
   const { devToast, setToast } = geminiZustand();
-  const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_API_KEY as string);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const [googleRes, setGoogleRes] = useState<string[] | null>(null)
   const [loader, setLoader] = useState(false)
 
@@ -49,18 +46,50 @@ const ChatActionsBtns = ({
       Current User Query:
       ${userPrompt}`
     try {
-      setLoader(true)
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      const googleResArray = JSON.parse(text);
-      setGoogleRes(googleResArray)
+      setLoader(true);
 
+      const response = await fetch("/api/gemini/queries", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+        }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = "Failed to generate search queries";
+
+        try {
+          const errorData = await response.json();
+
+          if (errorData?.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Ignore invalid error response.
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+
+      if (!Array.isArray(data?.queries)) {
+        throw new Error("Invalid query response");
+      }
+
+      setGoogleRes(data.queries);
     } catch (error) {
-      console.log(error)
-    }
-    finally {
-      setLoader(false)
+      console.error("Double-check response error:", error);
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "Failed to generate search queries"
+      );
+    } finally {
+      setLoader(false);
     }
   }
   return (
