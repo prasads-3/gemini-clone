@@ -13,6 +13,11 @@ pipeline {
 
     environment {
         APP_NAME = 'gemini-clone'
+        AWS_REGION = 'eu-west-1'
+        AWS_DEFAULT_REGION = 'eu-west-1'
+        AWS_ACCOUNT_ID = '064990711811'
+        ECR_REPOSITORY = 'gemini-clone'
+        ECR_REGISTRY = '064990711811.dkr.ecr.eu-west-1.amazonaws.com'
     }
 
     stages {
@@ -45,6 +50,9 @@ pipeline {
 
                     echo "Docker:"
                     docker --version
+
+                    echo "AWS CLI:"
+                    aws --version
 
                     echo "Trivy:"
                     trivy --version | head -n 1
@@ -96,6 +104,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Running TypeScript validation..."
+
                     npx tsc --noEmit
 
                     echo "TypeScript validation PASSED"
@@ -273,6 +282,68 @@ pipeline {
                 '''
             }
         }
+
+        stage('Push Image to AWS ECR') {
+            steps {
+                script {
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: 'aws-ecr']
+                    ]) {
+
+                        env.ECR_IMAGE =
+                            "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.IMAGE_TAG}"
+
+                        sh '''
+                            set -e
+
+                            echo "======================================"
+                            echo "AWS Identity"
+                            echo "======================================"
+
+                            aws sts get-caller-identity
+
+                            echo "======================================"
+                            echo "ECR Login"
+                            echo "======================================"
+
+                            aws ecr get-login-password \
+                                --region "$AWS_REGION" | \
+                            docker login \
+                                --username AWS \
+                                --password-stdin "$ECR_REGISTRY"
+
+                            echo "ECR login successful"
+
+                            echo "======================================"
+                            echo "Tagging Docker Image"
+                            echo "======================================"
+
+                            docker tag \
+                                "$IMAGE_NAME" \
+                                "$ECR_IMAGE"
+
+                            echo "Local Image:"
+                            echo "$IMAGE_NAME"
+
+                            echo "ECR Image:"
+                            echo "$ECR_IMAGE"
+
+                            echo "======================================"
+                            echo "Pushing Image to ECR"
+                            echo "======================================"
+
+                            docker push "$ECR_IMAGE"
+
+                            echo "======================================"
+                            echo "ECR PUSH SUCCESS"
+                            echo "======================================"
+                        '''
+                    }
+                }
+            }
+        }
     }
 
     post {
@@ -293,67 +364,19 @@ pipeline {
 
         success {
             echo "=========================================="
-            echo "CI PASSED"
+            echo "CI + ECR PUSH PASSED"
             echo "=========================================="
 
-            mail(
-                to: 'developerprasad479@gmail.com',
-                subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: """
-Hello,
-
-Jenkins Build Successful.
-
-Job Name     : ${env.JOB_NAME}
-Build Number : ${env.BUILD_NUMBER}
-Build URL    : ${env.BUILD_URL}
-
-Pipeline Stages:
-
-- Checkout
-- Toolchain Verification
-- Gitleaks Secret Scan
-- npm ci
-- TypeScript Validation
-- Next.js Build
-- SonarQube Analysis
-- Trivy Filesystem Scan
-- Docker Build
-- Container Smoke Test
-- Trivy Image Scan
-
-Docker Image:
-${env.IMAGE_NAME ?: 'N/A'}
-
-Regards,
-Jenkins
-"""
-            )
+            echo "Docker Image: ${env.IMAGE_NAME ?: 'N/A'}"
+            echo "ECR Image: ${env.ECR_IMAGE ?: 'N/A'}"
         }
 
         failure {
             echo "=========================================="
-            echo "CI FAILED"
+            echo "CI / ECR PIPELINE FAILED"
             echo "=========================================="
 
-            mail(
-                to: 'developerprasad479@gmail.com',
-                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: """
-Hello,
-
-Jenkins Build Failed.
-
-Job Name     : ${env.JOB_NAME}
-Build Number : ${env.BUILD_NUMBER}
-Build URL    : ${env.BUILD_URL}
-
-Please check the Jenkins console logs.
-
-Regards,
-Jenkins
-"""
-            )
+            echo "Check the Jenkins console logs."
         }
     }
 }
